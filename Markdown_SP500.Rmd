@@ -1,0 +1,604 @@
+---
+title: "Analiza spółek S&P 500"
+author: "Marcin Różalski"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Ładuję pakiety
+```{r}
+library(openxlsx)
+library(readxl)
+library(e1071)
+```
+# Wczytuję dane i sprawdzam strukturę, pierwsze rekordy oraz konwertuję pierwszą kolumnę w typ zmiennej date
+```{r echo=TRUE}
+plik <- "/Users/marcinrozalski/Desktop/R/uek/projekt_R/baza.xlsx"
+
+dane <- read_excel(plik)
+dim(dane)
+dane[[1]] <- as.Date(dane[[1]])
+
+names(dane)[1] <- "Data"
+
+str(dane)
+head(dane)
+```
+# Liczę zwykłe stopy zwrotu
+```{r echo=TRUE}
+ceny <- dane[, -1]
+ceny <- as.data.frame(ceny)
+
+stopa_prosta <- function(x) {
+  x <- as.numeric(x)
+  ret <- (x[2:length(x)] - x[1:(length(x)-1)]) / x[1:(length(x)-1)]
+  return(ret)
+}
+
+stopy_zwrotu <- as.data.frame(
+  lapply(ceny, stopa_prosta)
+)
+
+daty_ret <- dane$Data[-1]
+
+dane_ret <- cbind(Data = daty_ret, stopy_zwrotu)
+
+str(dane_ret)
+head(dane_ret)
+```
+# statystyki opisowe dla stóp zwrotu
+```{r}
+ret_num <- dane_ret[, -1] 
+
+srednia   <- apply(ret_num, 2, mean,    na.rm = TRUE)
+mediana   <- apply(ret_num, 2, median,  na.rm = TRUE)
+minimum   <- apply(ret_num, 2, min,     na.rm = TRUE)
+maksimum  <- apply(ret_num, 2, max,     na.rm = TRUE)
+wariancja <- apply(ret_num, 2, var,     na.rm = TRUE)
+odch_sd   <- apply(ret_num, 2, sd,      na.rm = TRUE)
+skosnosc  <- apply(ret_num, 2, skewness, na.rm = TRUE)
+kurtoza   <- apply(ret_num, 2, kurtosis, na.rm = TRUE)
+
+statystyki_ret <- data.frame(
+  
+  spolka = names(ret_num),
+  srednia   = srednia,
+  mediana   = mediana,
+  minimum   = minimum,
+  maksimum  = maksimum,
+  wariancja = wariancja,
+  odch_sd   = odch_sd,
+  skosnosc  = skosnosc,
+  kurtoza   = kurtoza
+)
+
+statystyki_ret 
+
+write.xlsx(statystyki_ret, "/Users/marcinrozalski/Desktop/R/uek")
+```
+# Wizualizacje stóp zwrotu - histogramy
+```{r echo=TRUE}
+par(mfrow = c(2, 3)) 
+
+for (nazwa in names(ret_num[1:6])) {
+  hist(ret_num[[nazwa]],
+       main = paste("Histogram stóp zwrotu:", nazwa),
+       xlab = nazwa,
+       col = "green",
+       border = "red")
+}
+```
+# Wizualizacje stóp zwrotu - boxplot
+```{r}
+par(mfrow = c(1, 1))
+
+boxplot(ret_num,
+        main = "Wykresy pudełkowe – stopy zwrotu",
+        xlab = "Instrument",
+        ylab = "Stopa zwrotu",
+        las  = 2)
+```
+# Wykresy liniowe stóp zwrotu w czasie
+```{r}
+par(mfrow = c(3, 2))
+
+for (nazwa in names(ret_num[1:6])) {
+  plot(dane_ret$Data, ret_num[[nazwa]],
+       type = "l",
+       main = paste(nazwa, "- stopy zwrotu w czasie"),
+       xlab = "Data",
+       ylab = "Stopa zwrotu")
+}
+```
+
+# Wizualizacje – poziom indeksu
+
+```{r echo=TRUE}
+plot(dane$Data, dane$'S&P 500',
+     type = "l",
+     main = "S&P 500 – poziom w czasie",
+     xlab = "Data",
+     ylab = "Poziom S&P 500")
+```
+
+# Wizualizacje – poziom spółek
+```{r}
+par(mfrow = c(2, 3))
+
+for (nazwa in names(ceny[1:6])) {
+  plot(dane$Data, ceny[[nazwa]],
+       type = "l",
+       main = paste(nazwa, "- poziom w czasie"),
+       xlab = "Data",
+       ylab = "Cena / indeks")
+}
+```
+
+# TEST ANOVA
+```{r echo=TRUE}
+dane_anova <- stack(ret_num[,-1])
+colnames(dane_anova) <- c("Stopa_zwrotu", "Instrument")
+
+model_anova <- aov(Stopa_zwrotu ~ Instrument, data = dane_anova)
+
+summary(model_anova)
+
+TukeyHSD(model_anova)
+
+```
+# TESTY t-Studenta – S&P 500 vs każda spółka
+```{r}
+SP500_ret <- ret_num[["S.P.500"]] 
+spolki <- setdiff(names(ret_num), "S.P.500")
+
+wyniki_t <- data.frame(
+  Spolka      = character(),
+  t_stat      = numeric(),
+  p_value     = numeric(),
+  mean_SP500  = numeric(),
+  mean_spolka = numeric(),
+  roznica_srednich = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (nazwa in spolki) {
+  sp_ret <- ret_num[[nazwa]]
+  
+  test_res <- t.test(SP500_ret, sp_ret, 
+                     alternative = "two.sided", 
+                     var.equal = FALSE)  # test t-Studenta Welcha
+  
+  wyniki_t <- rbind(
+    wyniki_t,
+    data.frame(
+      Spolka          = nazwa,
+      t_stat          = as.numeric(test_res$statistic),
+      p_value         = test_res$p.value,
+      mean_SP500      = mean(SP500_ret, na.rm = TRUE),
+      mean_spolka     = mean(sp_ret, na.rm = TRUE),
+      roznica_srednich = mean(sp_ret, na.rm = TRUE) - mean(SP500_ret, na.rm = TRUE),
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+wyniki_t
+
+write.xlsx(wyniki_t, "/Users/marcinrozalski/Desktop/R/uek/projekt_R")
+
+```
+# Zmienna sezonowa – dzień tygodnia
+```{r}
+dane_ret$DzienTyg <- weekdays(dane_ret$Data)
+
+dane_ret$DzienTyg <- factor(
+  dane_ret$DzienTyg,
+  levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+)
+
+table(dane_ret$DzienTyg)
+
+```
+# ANOVA – efekt dnia tygodnia + post-hoc Tukeya
+```{r}
+wyniki_anova_dni <- list()
+wyniki_tukey_dni <- list()
+
+for (nazwa in names(ret_num)) {
+  
+  tmp <- data.frame(
+    stopa = dane_ret[[nazwa]],
+    dzien = dane_ret$DzienTyg
+  )
+    model <- aov(stopa ~ dzien, data = tmp)
+  anova_res <- summary(model)
+  
+  wyniki_anova_dni[[nazwa]] <- anova_res
+  
+    # POST-HOC tylko jeśli ANOVA istotna
+  p_anova <- anova_res[[1]]$`Pr(>F)`[1]
+  
+  if (!is.na(p_anova) && p_anova < 0.05) {
+    tukey_res <- TukeyHSD(model)
+    wyniki_tukey_dni[[nazwa]] <- tukey_res
+  } else {
+    wyniki_tukey_dni[[nazwa]] <- "Brak istotnych różnic – post-hoc niewykonany"
+  }
+}
+
+wyniki_anova_dni
+wyniki_tukey_dni
+
+```
+# Testy t-Studenta: poniedziałek vs piątek
+
+```{r}
+
+wyniki_t_dni <- data.frame(
+  Instrument = character(),
+  t_stat     = numeric(),
+  p_value    = numeric(),
+  mean_mon   = numeric(),
+  mean_fri   = numeric(),
+  roznica    = numeric(),
+  stringsAsFactors = FALSE
+)
+
+
+for (nazwa in names(ret_num)) {
+  
+  mon <- dane_ret[dane_ret$DzienTyg == "Monday", nazwa]
+  fri <- dane_ret[dane_ret$DzienTyg == "Friday", nazwa]
+  
+  test <- t.test(mon, fri, var.equal = FALSE)
+  
+  wyniki_t_dni <- rbind(
+    wyniki_t_dni,
+    data.frame(
+      Instrument = nazwa,
+      t_stat     = as.numeric(test$statistic),
+      p_value    = test$p.value,
+      mean_mon   = mean(mon, na.rm = TRUE),
+      mean_fri   = mean(fri, na.rm = TRUE),
+      roznica    = mean(fri, na.rm = TRUE) - mean(mon, na.rm = TRUE)
+    )
+  )
+}
+wyniki_t_dni
+
+```
+# Statystyki opisowe wg dni tygodnia
+```{r}
+library(dplyr)
+
+stat_dni <- dane_ret %>%
+  select(-Data) %>%
+  group_by(DzienTyg) %>%
+  summarise(across(
+    .cols = everything(),
+    .fns = list(
+      mean = ~mean(.x, na.rm = TRUE),
+      sd   = ~sd(.x, na.rm = TRUE)
+    ),
+    .names = "{.col}_{.fn}"
+  ))
+
+stat_dni
+```
+# Korelacje stóp zwrotu + portfele dla pary min korelacji
+```{r echo=TRUE}
+#Macierz korelacji (SP500 + spółki)
+corr_mat <- cor(ret_num, use = "pairwise.complete.obs", method = "pearson")
+corr_mat
+
+# Korelacje spółki–SP500
+SP500_corr <- corr_mat["S.P.500", setdiff(colnames(corr_mat), "S.P.500")]
+SP500_corr <- sort(SP500_corr)   # od najmniejszej do największej
+SP500_corr
+
+# Korelacje spółka–spółka (bez SP500)
+spolki <- setdiff(colnames(ret_num), "S.P.500")
+corr_sp <- cor(ret_num[, spolki], use = "pairwise.complete.obs")
+
+corr_sp_ut <- corr_sp
+corr_sp_ut[lower.tri(corr_sp_ut, diag = TRUE)] <- NA
+
+min_val <- min(corr_sp_ut, na.rm = TRUE)
+idx <- which(corr_sp_ut == min_val, arr.ind = TRUE)[1, ]
+
+asset1 <- colnames(corr_sp_ut)[idx[2]]
+asset2 <- rownames(corr_sp_ut)[idx[1]]
+
+cat("Para o najmniejszej korelacji (wśród spółek):", asset1, "i", asset2,
+    "\nKorelacja:", min_val, "\n")
+
+#Parametry 2 aktywów (z danych)
+mu1 <- mean(ret_num[[asset1]], na.rm = TRUE)
+mu2 <- mean(ret_num[[asset2]], na.rm = TRUE)
+sd1 <- sd(ret_num[[asset1]], na.rm = TRUE)
+sd2 <- sd(ret_num[[asset2]], na.rm = TRUE)
+rho <- cor(ret_num[[asset1]], ret_num[[asset2]], use = "pairwise.complete.obs")
+
+# Funkcje Rp i sigma_p dla 2 aktywów
+Rp <- function(w) w*mu1 + (1-w)*mu2
+sigp <- function(w) sqrt(w^2*sd1^2 + (1-w)^2*sd2^2 + 2*w*(1-w)*rho*sd1*sd2)
+
+w_mvp <- (sd2^2 - rho*sd1*sd2) / (sd1^2 + sd2^2 - 2*rho*sd1*sd2)
+Rp_mvp <- Rp(w_mvp)
+sd_mvp <- sigp(w_mvp)
+
+cat("MVP: w =", w_mvp, "(waga w", asset1, ")\n",
+    "Rp =", Rp_mvp, "  sd =", sd_mvp, "\n")
+
+#Portfele bez krótkiej sprzedaży: w ∈ [0, 1]
+
+w_grid_noshort <- seq(0, 1, by = 0.001)
+
+port_noshort <- data.frame(
+  w = w_grid_noshort,
+  Rp = Rp(w_grid_noshort),
+  sd = sigp(w_grid_noshort)
+)
+
+
+# Tabela parametrów (opcjonalnie: co 0.05 dla czytelności)
+port_noshort_tab <- subset(port_noshort, abs(w*20 - round(w*20)) < 1e-9)
+port_noshort_tab
+
+# Wersja MVP "przycięta" do [0,1] (jeśli MVP wypada poza zakresem bez shorta)
+w_mvp_clip <- min(max(w_mvp, 0), 1)
+Rp_mvp_clip <- Rp(w_mvp_clip)
+sd_mvp_clip <- sigp(w_mvp_clip)
+
+
+# Wykres: zbiór możliwych portfeli (bez shorta)
+plot(port_noshort$sd, port_noshort$Rp,
+     type = "l",
+     xlab = "Odchylenie standardowe portfela (ryzyko)",
+     ylab = "Oczekiwana stopa zwrotu portfela (Rp)",
+     main = paste("Zbiór portfeli:", asset1, "+", asset2, "(bez krótkiej sprzedaży)"))
+
+
+points(sd1, mu1, pch = 19)
+text(sd1, mu1, labels = asset1, pos = 4)
+points(sd2, mu2, pch = 19)
+text(sd2, mu2, labels = asset2, pos = 4)
+
+
+# Zaznacz MVP (w granicach [0,1])
+points(sd_mvp_clip, Rp_mvp_clip, pch = 8, cex = 1.4)
+text(sd_mvp_clip, Rp_mvp_clip, labels = "MVP", pos = 4)
+
+
+#Portfele z krótką sprzedażą: w ∈ [w_min, w_max]
+#      (np. [-1, 2] = short do 100% i lewar do 200% na jednym aktywie)
+
+
+w_grid_short <- seq(-1, 2, by = 0.001)
+
+port_short <- data.frame(
+  w = w_grid_short,
+  Rp = Rp(w_grid_short),
+  sd = sigp(w_grid_short)
+)
+
+# Wykres: zbiór portfeli z shortem (rozszerzony)
+plot(port_short$sd, port_short$Rp,
+     type = "l",
+     xlab = "Odchylenie standardowe portfela (ryzyko)",
+     ylab = "Oczekiwana stopa zwrotu portfela (Rp)",
+     main = paste("Zbiór portfeli:", asset1, "+", asset2, "(z krótką sprzedażą)"))
+
+# punkty aktywów
+points(sd1, mu1, pch = 19)
+text(sd1, mu1, labels = asset1, pos = 4)
+points(sd2, mu2, pch = 19)
+text(sd2, mu2, labels = asset2, pos = 4)
+
+# MVP bez ograniczeń (może wypaść poza [0,1] – i o to chodzi w short-selling)
+points(sd_mvp, Rp_mvp, pch = 8, cex = 1.4)
+text(sd_mvp, Rp_mvp, labels = "MVP", pos = 4)
+
+# Dla orientacji zaznacz w=0 i w=1 (czyli „czyste” aktywa)
+points(sigp(0), Rp(0), pch = 1)
+points(sigp(1), Rp(1), pch = 1)
+```
+# Parametry portfela
+```{r echo=TRUE}
+mu <- colMeans(ret_num, na.rm = TRUE)           # oczekiwane stopy zwrotu
+Sigma <- cov(ret_num, use = "pairwise.complete.obs")  # macierz kowariancji
+
+mu
+Sigma
+
+#Portfel minimalnej wariancji (MVP)
+one <- rep(1, length(mu))
+
+Sigma_inv <- solve(Sigma)
+
+w_mvp <- as.vector(Sigma_inv %*% one / as.numeric(t(one) %*% Sigma_inv %*% one))
+names(w_mvp) <- names(mu)
+
+Rp_mvp <- sum(w_mvp * mu)
+sd_mvp <- sqrt(as.numeric(t(w_mvp) %*% Sigma %*% w_mvp))
+
+w_mvp
+Rp_mvp
+sd_mvp
+
+#Krzywa efektywna – obliczenia
+
+A <- as.numeric(t(one) %*% Sigma_inv %*% one)
+B <- as.numeric(t(one) %*% Sigma_inv %*% mu)
+C <- as.numeric(t(mu)  %*% Sigma_inv %*% mu)
+D <- A*C - B^2
+
+# zakres stóp zwrotu dla krzywej efektywnej
+Rp_grid <- seq(min(mu), max(mu), length.out = 100)
+
+sd_eff <- sqrt((A*Rp_grid^2 - 2*B*Rp_grid + C) / D)
+
+# tabela krzywej efektywnej
+frontier <- data.frame(
+  Rp = Rp_grid,
+  sd = sd_eff
+)
+head(frontier)
+```
+#Wykres – krzywa efektywna (lepsze ustawienie osi)
+```{r echo=TRUE}
+
+sd_assets <- apply(ret_num, 2, sd, na.rm = TRUE)
+mu_assets <- mu
+
+# zakres osi X: od 0 do trochę powyżej maksimum (żeby był oddech)
+x_max <- max(c(sd_assets, frontier$sd, sd_mvp), na.rm = TRUE)
+x_lim <- c(0, x_max * 1.10)
+
+# zakres osi Y: z marginesem w dół i w górę (żeby nie przycinało podpisów)
+y_min <- min(c(mu_assets, frontier$Rp, Rp_mvp), na.rm = TRUE)
+y_max <- max(c(mu_assets, frontier$Rp, Rp_mvp), na.rm = TRUE)
+y_rng <- y_max - y_min
+y_lim <- c(y_min - 0.10 * y_rng, y_max + 0.20 * y_rng)
+
+
+plot(sd_assets, mu_assets,
+     pch = 19,
+     xlim = x_lim,
+     ylim = y_lim,
+     xlab = "Odchylenie standardowe (σ) – ryzyko",
+     ylab = "Oczekiwana stopa zwrotu (Rp)",
+     main = "Krzywa efektywna – aktywa, MVP i frontier")
+
+# podpisy aktywów (lekko odsunięte)
+text(sd_assets, mu_assets, labels = names(mu), pos = 4, cex = 0.9)
+
+# krzywa efektywna
+lines(frontier$sd, frontier$Rp, lwd = 2)
+
+# MVP
+points(sd_mvp, Rp_mvp, pch = 8, cex = 1.6)
+text(sd_mvp, Rp_mvp, labels = "MVP", pos = 4, cex = 0.9)
+
+#siatka dla czytelności
+grid()
+```
+#Tabela wyników
+```{r}
+
+wyniki_portfel <- rbind(
+  data.frame(
+    Typ = "MVP",
+    Rp = Rp_mvp,
+    sd = sd_mvp
+  ),
+  data.frame(
+    Typ = "Krzywa efektywna",
+    Rp = frontier$Rp,
+    sd = frontier$sd
+  )
+)
+
+head(wyniki_portfel)
+```
+#Krzywa efektywna z krótką sprzedażą (bez ograniczeń wag)
+```{r}
+mu <- colMeans(ret_num, na.rm = TRUE)
+Sigma <- cov(ret_num, use = "pairwise.complete.obs")
+
+n <- length(mu)
+one <- rep(1, n)
+
+Sigma_inv <- solve(Sigma)
+
+A <- as.numeric(t(one) %*% Sigma_inv %*% one)
+B <- as.numeric(t(one) %*% Sigma_inv %*% mu)
+C <- as.numeric(t(mu)  %*% Sigma_inv %*% mu)
+D <- A*C - B^2
+
+# MVP (minimum variance portfolio) – bez ograniczeń (short-selling dozwolony)
+w_mvp <- as.vector(Sigma_inv %*% one / as.numeric(t(one) %*% Sigma_inv %*% one))
+names(w_mvp) <- names(mu)
+
+Rp_mvp <- sum(w_mvp * mu)
+sd_mvp <- sqrt(as.numeric(t(w_mvp) %*% Sigma %*% w_mvp))
+
+# zakres Rp dla krzywej (rozszerzony względem min/max aktywów, bo short-selling może dać dalej)
+Rp_min <- min(mu) - 0.5 * (max(mu) - min(mu))
+Rp_max <- max(mu) + 0.5 * (max(mu) - min(mu))
+
+Rp_grid <- seq(Rp_min, Rp_max, length.out = 200)
+
+# krzywa efektywna (sigma minimalne dla danego Rp) – wzór Markowitza
+sd_front <- sqrt((A*Rp_grid^2 - 2*B*Rp_grid + C) / D)
+
+frontier_short <- data.frame(
+  Rp = Rp_grid,
+  sd = sd_front
+)
+
+frontier_short <- frontier_short[is.finite(frontier_short$sd), ]
+```
+#Tabela wyników: frontier + MVP
+
+```{r}
+wyniki_frontier <- rbind(
+  data.frame(
+    Typ = "MVP",
+    Rp  = Rp_mvp,
+    sd  = sd_mvp
+  ),
+  data.frame(
+    Typ = "Frontier (short-selling)",
+    Rp  = frontier_short$Rp,
+    sd  = frontier_short$sd
+  )
+)
+head(wyniki_frontier, 10)
+
+mvp_wagi <- data.frame(
+  Instrument = names(w_mvp),
+  Waga = w_mvp
+)
+
+mvp_wagi
+```
+#Wykres: aktywa + MVP + krzywa efektywna (short-selling)
+```{r}
+# parametry pojedynczych aktywów
+sd_assets <- apply(ret_num, 2, sd, na.rm = TRUE)
+mu_assets <- colMeans(ret_num, na.rm = TRUE)
+
+# zakres osi X: sigma od 0
+x_max <- max(c(sd_assets, frontier_short$sd, sd_mvp), na.rm = TRUE)
+x_lim <- c(0, x_max * 1.10)
+
+# zakres osi Y: z marginesem
+y_min <- min(c(mu_assets, frontier_short$Rp, Rp_mvp), na.rm = TRUE)
+y_max <- max(c(mu_assets, frontier_short$Rp, Rp_mvp), na.rm = TRUE)
+y_rng <- y_max - y_min
+y_lim <- c(y_min - 0.10*y_rng, y_max + 0.20*y_rng)
+
+plot(sd_assets, mu_assets,
+     pch = 19,
+     xlim = x_lim,
+     ylim = y_lim,
+     xlab = "Odchylenie standardowe (σ) – ryzyko",
+     ylab = "Oczekiwana stopa zwrotu (Rp)",
+     main = "Krzywa efektywna (short-selling): aktywa, MVP i frontier")
+
+
+# etykiety aktywów
+text(sd_assets, mu_assets, labels = names(mu_assets), pos = 4, cex = 0.9)
+
+# krzywa efektywna (short-selling)
+lines(frontier_short$sd, frontier_short$Rp, lwd = 2)
+
+# MVP
+points(sd_mvp, Rp_mvp, pch = 8, cex = 1.7)
+text(sd_mvp, Rp_mvp, labels = "MVP", pos = 4, cex = 0.9)
+
+grid()
+
+```
+
