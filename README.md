@@ -1,0 +1,1 @@
+# Analiza-spolek-S-P-500
